@@ -50,9 +50,19 @@ export default function TrackerPage({ params }: { params: Promise<{ id: string }
   }, [t, demo, id]);
 
   const patch = useCallback(async (body: object) => {
-    const r = await fetch(`/api/trackers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || "Could not save.");
+    // iPhone Safari and in-app browsers (WhatsApp, Instagram) often drop the first
+    // request after the camera has been open, throwing "Load failed". Retry a few times.
+    let r: Response | null = null;
+    for (let attempt = 0; attempt < 3 && !r; attempt++) {
+      try {
+        r = await fetch(`/api/trackers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+      } catch {
+        await new Promise((ok) => setTimeout(ok, 600 * (attempt + 1)));
+      }
+    }
+    if (!r) throw new Error("Couldn't reach Month Six. Check your internet and tap Save again. Nothing you entered is lost.");
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Could not save. Try again in a minute.");
     setT(j);
   }, [id]);
 
@@ -233,11 +243,12 @@ function CheckinForm({ t, demo, patch, photos, setPhotos }: { t: Tracker; demo: 
   async function submit() {
     setMsg("");
     try {
-      await patch({ action: "addCheckin", checkin: a });
+      // Photos go to this phone first, so they are kept even if the network save fails.
       if (Object.keys(shots).length) {
         const today = todayISO();
         await setPhotos([...photos.filter((p) => p.date !== today), { date: today, photos: shots }].sort((x, y) => x.date.localeCompare(y.date)));
       }
+      await patch({ action: "addCheckin", checkin: a });
       setOpen(false);
       setShots({});
       setA({ systemic: "No" });
